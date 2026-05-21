@@ -616,16 +616,41 @@ footer span{color:var(--accent);}
     <button class="back-btn" onclick="goBack()"><i class="fas fa-arrow-left"></i> Dashboard</button>
     <div class="page-hdr">
       <div class="ph-icon ic-sim"><i class="fas fa-desktop"></i></div>
-      <div><h2>Partial Derivative Simulator</h2><p>Compute ∂f/∂x and ∂f/∂y interactively</p></div>
+      <div><h2>Partial Derivative Simulator</h2><p>Enter any f(x,y) — computes ∂f/∂x and ∂f/∂y numerically</p></div>
     </div>
     <div class="sim-panel">
-      <div class="func-card">
-        <div class="label">Function</div>
-        <div class="func-display">
-          f(<span class="var">x</span>, <span class="var">y</span>) = <span class="var">x</span>²·<span class="var">y</span> + 2·<span class="var">x</span>·<span class="var">y</span>²
+
+      <!-- Function input -->
+      <div class="func-card" style="text-align:left;">
+        <div class="label" style="margin-bottom:10px;">Enter f(x, y)</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <span style="font-family:'Space Mono',monospace;font-size:1.1rem;color:var(--accent3);white-space:nowrap;">f(x, y) =</span>
+          <input type="text" id="funcInput"
+            value="x^2*y + 2*x*y^2"
+            placeholder="e.g. x^2*y + sin(x*y) + exp(x)"
+            style="flex:1;min-width:200px;padding:12px 16px;background:var(--surface2);
+                   border:1px solid var(--border);border-radius:12px;color:var(--accent3);
+                   font-family:'Space Mono',monospace;font-size:1rem;transition:.2s;"
+            id="funcInput">
+          <button class="sim-btn sim-btn-x" id="btnLoadFunc" style="flex:0;min-width:auto;padding:12px 20px;white-space:nowrap;">
+            <i class="fas fa-check"></i> Load
+          </button>
+        </div>
+        <div id="funcError" style="color:#f87171;font-size:12px;margin-top:8px;display:none;"></div>
+        <div id="funcPreview" style="margin-top:10px;font-size:13px;color:var(--muted);">
+          Supported: <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">+  -  *  /  ^  sin  cos  tan  log  ln  exp  sqrt  abs  pi  e</code>
         </div>
       </div>
 
+      <!-- Loaded function display -->
+      <div class="func-card" id="funcDisplay">
+        <div class="label">Loaded Function</div>
+        <div class="func-display" id="funcDisplayText">
+          f(<span class="var">x</span>, <span class="var">y</span>) = <span style="color:var(--text)">x^2*y + 2*x*y^2</span>
+        </div>
+      </div>
+
+      <!-- x, y values -->
       <div class="inputs-row">
         <div class="inp-group">
           <label><i class="fas fa-x"></i> &nbsp;Value of x</label>
@@ -648,9 +673,23 @@ footer span{color:var(--accent);}
 
       <div class="result-card" id="simResult">
         <div class="r-label"><i class="fas fa-chart-line"></i> &nbsp;Result</div>
-        <div class="result-value" id="resultVal">— Click a button above —</div>
+        <div class="result-value" id="resultVal">— Load a function and click Compute —</div>
         <div class="result-formula" id="resultFormula"></div>
         <div class="result-steps" id="resultSteps"></div>
+      </div>
+
+      <!-- Quick examples -->
+      <div style="margin-top:8px;">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:10px;">Quick Examples</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;" id="exampleBtns">
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;" data-fn="x^2*y + 2*x*y^2">x²y + 2xy²</button>
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;" data-fn="sin(x*y)">sin(xy)</button>
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;" data-fn="exp(x*y)">e^(xy)</button>
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;" data-fn="x^3 + y^3 - 3*x*y">x³+y³−3xy</button>
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;" data-fn="log(x^2 + y^2)">ln(x²+y²)</button>
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;" data-fn="x*cos(y) + y*sin(x)">x·cos(y)+y·sin(x)</button>
+          <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;" data-fn="sqrt(x^2 + y^2)">√(x²+y²)</button>
+        </div>
       </div>
     </div>
   </div>
@@ -875,10 +914,98 @@ function showToast(msg,type='ok'){
   setTimeout(()=>t.classList.remove('show'),3000);
 }
 
-// ── Simulator ────────────────────────────────────────────────
-// f(x,y) = x²y + 2xy²
-// ∂f/∂x  = 2xy + 2y²
-// ∂f/∂y  = x² + 4xy
+// ── Simulator — User-defined function engine ──────────────────
+
+// Safe expression evaluator: converts math expression string → JS function
+// Supports: + - * / ^ sin cos tan log ln exp sqrt abs pi e
+let compiledFn = null;
+let currentFnStr = 'x^2*y + 2*x*y^2';
+
+function compileFunction(expr){
+  // Preprocess: replace ^ with **, add Math. prefixes, handle implicit multiply
+  let e = expr.trim();
+  // implicit multiplication: 2x → 2*x, x( → x*(, )x → )*x
+  e = e.replace(/(\d)([a-zA-Z])/g,'$1*$2');
+  e = e.replace(/([a-zA-Z\d])\(/g,'$1*(');
+  // restore function names that got mangled: sin*(, cos*(, etc.
+  e = e.replace(/\b(sin|cos|tan|exp|sqrt|abs|log|ln)\s*\*/g,'$1');
+  // ^ → **
+  e = e.replace(/\^/g,'**');
+  // ln → Math.log
+  e = e.replace(/\bln\b/g,'Math.log');
+  // log → Math.log (natural; note: users expect ln=log for engineering math)
+  e = e.replace(/\blog\b/g,'Math.log');
+  e = e.replace(/\bsin\b/g,'Math.sin');
+  e = e.replace(/\bcos\b/g,'Math.cos');
+  e = e.replace(/\btan\b/g,'Math.tan');
+  e = e.replace(/\bexp\b/g,'Math.exp');
+  e = e.replace(/\bsqrt\b/g,'Math.sqrt');
+  e = e.replace(/\babs\b/g,'Math.abs');
+  e = e.replace(/\bpi\b/g,'Math.PI');
+  e = e.replace(/\be\b/g,'Math.E');
+  // Build function
+  try {
+    // eslint-disable-next-line no-new-func
+    const fn = new Function('x','y',"use strict"; return (${e}););
+    // test it
+    const test = fn(1,1);
+    if(typeof test !== 'number' || !isFinite(test)) throw new Error('Result is not a finite number');
+    return fn;
+  } catch(err){
+    throw new Error('Parse error: ' + err.message);
+  }
+}
+
+function loadFunction(){
+  const input = document.getElementById('funcInput').value.trim();
+  const errEl = document.getElementById('funcError');
+  errEl.style.display='none';
+  if(!input){ errEl.textContent='Please enter a function.'; errEl.style.display='block'; return false; }
+  try {
+    compiledFn = compileFunction(input);
+    currentFnStr = input;
+    document.getElementById('funcDisplayText').innerHTML=
+      f(<span class="var">x</span>, <span class="var">y</span>) = <span style="color:var(--text)">${escHtml(input)}</span>;
+    // reset result
+    const rc=document.getElementById('simResult');
+    rc.className='result-card';
+    document.getElementById('resultVal').textContent='— Click Compute ∂f/∂x or ∂f/∂y —';
+    document.getElementById('resultFormula').textContent='';
+    document.getElementById('resultSteps').innerHTML='';
+    showToast('Function loaded! Ready to differentiate.','ok');
+    return true;
+  } catch(err){
+    errEl.textContent=err.message;
+    errEl.style.display='block';
+    compiledFn=null;
+    showToast('Invalid function — check syntax.','err');
+    return false;
+  }
+}
+
+document.getElementById('btnLoadFunc').addEventListener('click', loadFunction);
+// Also load on Enter key in function input
+document.getElementById('funcInput').addEventListener('keydown', e=>{
+  if(e.key==='Enter') loadFunction();
+});
+
+// Quick example buttons
+document.querySelectorAll('#exampleBtns [data-fn]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.getElementById('funcInput').value = btn.getAttribute('data-fn');
+    loadFunction();
+  });
+});
+
+// Numerical differentiation using central difference (high accuracy)
+function numericalDerivX(fn, x, y){
+  const h = 1e-5;
+  return (fn(x+h, y) - fn(x-h, y)) / (2*h);
+}
+function numericalDerivY(fn, x, y){
+  const h = 1e-5;
+  return (fn(x, y+h) - fn(x, y-h)) / (2*h);
+}
 
 function getSimVals(){
   let x=parseFloat(document.getElementById('simX').value);
@@ -886,44 +1013,66 @@ function getSimVals(){
   if(isNaN(x))x=0; if(isNaN(y))y=0;
   return{x,y};
 }
+
 function computePartialX(){
+  if(!compiledFn){ showToast('Load a function first.','err'); return; }
   const{x,y}=getSimVals();
-  const deriv=2*x*y + 2*y*y;
+  let deriv, fval;
+  try {
+    deriv = numericalDerivX(compiledFn, x, y);
+    fval  = compiledFn(x, y);
+  } catch(e){ showToast('Evaluation error at given x,y.','err'); return; }
+
   const rc=document.getElementById('simResult');
   rc.className='result-card result-x';
   document.getElementById('resultVal').innerHTML=
-    <span style="color:var(--accent)">∂f/∂x</span> = <span style="color:var(--accent3)">${deriv.toFixed(4)}</span>;
+    <span style="color:var(--accent)">∂f/∂x</span> = <span style="color:var(--accent3)">${deriv.toFixed(6)}</span>;
   document.getElementById('resultFormula').textContent=
-    Formula: 2·x·y + 2·y²  |  at (x=${x}, y=${y});
+    Numerical partial derivative w.r.t. x  |  at (x=${x}, y=${y})  |  f(x,y) = ${fval.toFixed(6)};
   document.getElementById('resultSteps').innerHTML=
-    <strong>Step-by-step:</strong><br>+
-    <span class="step-badge">1</span>f(x,y) = x²·y + 2·x·y² — treat y as constant<br>+
-    <span class="step-badge">2</span>∂(x²·y)/∂x = 2x·y  &nbsp;→ power rule on x², y is just a coefficient<br>+
-    <span class="step-badge">3</span>∂(2·x·y²)/∂x = 2y²  &nbsp;→ 2y² is the coefficient of x¹<br>+
-    <span class="step-badge">4</span>∂f/∂x = 2xy + 2y² = 2·(${x})·(${y}) + 2·(${y})² = <strong style="color:var(--accent3)">${deriv.toFixed(4)}</strong>;
+    <strong>Method — Central Difference:</strong><br>+
+    <span class="step-badge">1</span>Treat <strong>y = ${y}</strong> as a constant<br>+
+    <span class="step-badge">2</span>∂f/∂x ≈ [f(x+h, y) − f(x−h, y)] / 2h &nbsp; where h = 10⁻⁵<br>+
+    <span class="step-badge">3</span>f(${x}+h, ${y}) ≈ ${compiledFn(x+1e-5,y).toFixed(6)}<br>+
+    <span class="step-badge">4</span>f(${x}−h, ${y}) ≈ ${compiledFn(x-1e-5,y).toFixed(6)}<br>+
+    <span class="step-badge">5</span><strong>∂f/∂x = <span style="color:var(--accent3)">${deriv.toFixed(6)}</span></strong> &nbsp;(y held constant at ${y});
 }
+
 function computePartialY(){
+  if(!compiledFn){ showToast('Load a function first.','err'); return; }
   const{x,y}=getSimVals();
-  const deriv=x*x + 4*x*y;
+  let deriv, fval;
+  try {
+    deriv = numericalDerivY(compiledFn, x, y);
+    fval  = compiledFn(x, y);
+  } catch(e){ showToast('Evaluation error at given x,y.','err'); return; }
+
   const rc=document.getElementById('simResult');
   rc.className='result-card result-y';
   document.getElementById('resultVal').innerHTML=
-    <span style="color:var(--accent2)">∂f/∂y</span> = <span style="color:var(--accent3)">${deriv.toFixed(4)}</span>;
+    <span style="color:var(--accent2)">∂f/∂y</span> = <span style="color:var(--accent3)">${deriv.toFixed(6)}</span>;
   document.getElementById('resultFormula').textContent=
-    Formula: x² + 4·x·y  |  at (x=${x}, y=${y});
+    Numerical partial derivative w.r.t. y  |  at (x=${x}, y=${y})  |  f(x,y) = ${fval.toFixed(6)};
   document.getElementById('resultSteps').innerHTML=
-    <strong>Step-by-step:</strong><br>+
-    <span class="step-badge">1</span>f(x,y) = x²·y + 2·x·y² — treat x as constant<br>+
-    <span class="step-badge">2</span>∂(x²·y)/∂y = x²  &nbsp;→ x² is the coefficient of y¹<br>+
-    <span class="step-badge">3</span>∂(2·x·y²)/∂y = 4xy  &nbsp;→ power rule on y², 2x is coefficient<br>+
-    <span class="step-badge">4</span>∂f/∂y = x² + 4xy = (${x})² + 4·(${x})·(${y}) = <strong style="color:var(--accent3)">${deriv.toFixed(4)}</strong>;
+    <strong>Method — Central Difference:</strong><br>+
+    <span class="step-badge">1</span>Treat <strong>x = ${x}</strong> as a constant<br>+
+    <span class="step-badge">2</span>∂f/∂y ≈ [f(x, y+h) − f(x, y−h)] / 2h &nbsp; where h = 10⁻⁵<br>+
+    <span class="step-badge">3</span>f(${x}, ${y}+h) ≈ ${compiledFn(x,y+1e-5).toFixed(6)}<br>+
+    <span class="step-badge">4</span>f(${x}, ${y}−h) ≈ ${compiledFn(x,y-1e-5).toFixed(6)}<br>+
+    <span class="step-badge">5</span><strong>∂f/∂y = <span style="color:var(--accent3)">${deriv.toFixed(6)}</span></strong> &nbsp;(x held constant at ${x});
 }
 
-document.getElementById('btnPartialX').addEventListener('click',computePartialX);
-document.getElementById('btnPartialY').addEventListener('click',computePartialY);
-// Live update on input change
-document.getElementById('simX').addEventListener('input',()=>{if(document.getElementById('simResult').className.includes('result-x'))computePartialX(); else if(document.getElementById('simResult').className.includes('result-y'))computePartialY();});
-document.getElementById('simY').addEventListener('input',()=>{if(document.getElementById('simResult').className.includes('result-x'))computePartialX(); else if(document.getElementById('simResult').className.includes('result-y'))computePartialY();});
+document.getElementById('btnPartialX').addEventListener('click', computePartialX);
+document.getElementById('btnPartialY').addEventListener('click', computePartialY);
+
+// Live-update when x/y values change (if a derivative was already shown)
+function liveUpdate(){
+  const cls=document.getElementById('simResult').className;
+  if(cls.includes('result-x')) computePartialX();
+  else if(cls.includes('result-y')) computePartialY();
+}
+document.getElementById('simX').addEventListener('input', liveUpdate);
+document.getElementById('simY').addEventListener('input', liveUpdate);
 
 // ── MCQ Scoring ───────────────────────────────────────────────
 function scoreForm(prefix,count){
